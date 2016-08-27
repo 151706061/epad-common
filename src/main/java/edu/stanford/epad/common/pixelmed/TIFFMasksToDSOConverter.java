@@ -112,6 +112,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 
 import javax.imageio.ImageIO;
@@ -141,9 +142,11 @@ public class TIFFMasksToDSOConverter
 	private double[] spacing = new double[] { 0.65, 0.8 };
 	private double thickness = 0.5;
 	private double[][] positions = null;
+	private double[] sliceLocations = null;
 	private short imageWidth = 0, imageHeight = 0, numberOfFrames = 0;
 
 	private static final EPADLogger log = EPADLogger.getInstance();
+	public static HashMap<String,Integer> firstFrames= new HashMap<>();
 
 	/**
 	 * @param maskFiles: Array of the TIFF files which contain the masks.
@@ -167,6 +170,57 @@ public class TIFFMasksToDSOConverter
 	{
 		return generateDSO(maskFilePaths, dicomFilePaths, outputFilePath, dsoSeriesDescription, dsoSeriesUID, dsoInstanceUID, false);
 	}
+
+
+	/**
+	 * @param maskFiles: Array of the TIFF files which contain the masks.
+	 * @param dicomFiles: Array of the original DICOM files.
+	 * @param outputFile: Name of the output segmentation objects file.
+	 * @param dsoSeriesDescription: Series Name of created segmentation object.
+	 * @param dsoSeriesUID: Series UID.
+	 * @param dsoInstanceUID: SOP Instance UID.
+	 * @param removeEmptyFrames: if true, optimize size by removing empty frames.
+	 * @return uids: uids[0] = Series UID uids[1] = ImageUID/InstanceUID
+	 * @throws DicomException
+	 */
+
+	//ml imgType added for saving color in dso
+	public String[] generateDSO(List<String> maskFilePaths, List<String> dicomFilePaths, String outputFilePath, String dsoSeriesDescription, String dsoSeriesUID, String dsoInstanceUID, boolean removeEmptyFrames, String imgType)
+			throws DicomException
+	{
+		try {
+			List<String> originalFilePaths = new ArrayList<String>();
+			for (String path: dicomFilePaths)
+				originalFilePaths.add(path);
+			// Following call fills in: dicomAttributes, orientation, spacing, thickness, positions, pixels, imageWidth,
+			// imageHeight, imageFrames
+			log.info("Getting attributes from DICOM files");
+			int minInstanceNo = getAttributesFromDICOMFiles(dicomFilePaths);
+			if (minInstanceNo > 1) removeEmptyFrames = false;
+			log.info("Reading pixels from mask files");
+			//send dso instance uid so it can be used in the map for framenumbers
+			byte[] pixels = getPixelsFromMaskFiles(maskFilePaths, dicomFilePaths, removeEmptyFrames, dsoInstanceUID);
+			if (dicomFilePaths.size() != dicomAttributes.length)
+			{
+				AttributeList[] dicomAttributesNew = new AttributeList[dicomFilePaths.size()];
+				int i = 0;
+				for (AttributeList attrs: dicomAttributes)
+				{
+					if (attrs == null) continue;
+					dicomAttributesNew[i++] = attrs;
+				}
+				dicomAttributes = dicomAttributesNew;
+				this.numberOfFrames = (short)dicomFilePaths.size();
+			}
+			log.debug("Dicom Files:" + dicomFilePaths.size() + " attributeLists:" + dicomAttributes.length);
+			return generateDSO(pixels, dicomFilePaths, outputFilePath, dsoSeriesDescription, dsoSeriesUID, dsoInstanceUID, imgType);
+		} catch (Exception e) {
+			e.printStackTrace();
+			log.warning("Error generating DSO: " + e);
+			throw (new DicomException("Error generating DSO: " + e.getMessage()));
+		}	
+	}
+
 	/**
 	 * @param maskFiles: Array of the TIFF files which contain the masks.
 	 * @param dicomFiles: Array of the original DICOM files.
@@ -212,7 +266,40 @@ public class TIFFMasksToDSOConverter
 			throw (new DicomException("Error generating DSO: " + e.getMessage()));
 		}	
 	}
-	
+
+	//ml imgType added for saving color in dso
+	public String[] generateDSO(byte[] pixeldata, List<String> dicomFilePaths, String outputFilePath, String dsoSeriesDescription, String dsoSeriesUID, String dsoInstanceUID, String imgType)
+			throws DicomException
+	{
+		try {
+			if (dicomAttributes == null) getAttributesFromDICOMFiles(dicomFilePaths);
+			SegmentationObjectsFileWriter dsoWriter = new SegmentationObjectsFileWriter(dicomAttributes, orientation,
+					spacing, thickness, dsoSeriesDescription, dsoSeriesUID, dsoInstanceUID);
+			CodedConcept category = new CodedConcept("C0085089" /* conceptUniqueIdentifier */, "260787004" /* SNOMED CID */,
+					"SRT" /* codingSchemeDesignator */, "SNM3" /* legacyCodingSchemeDesignator */,
+					null /* codingSchemeVersion */, "A-00004" /* codeValue */, "Physical Object" /* codeMeaning */,
+					null /* codeStringEquivalent */, null /* synonynms */);
+			CodedConcept type = new CodedConcept("C0018787" /* conceptUniqueIdentifier */, "80891009" /* SNOMED CID */,
+					"SRT" /* codingSchemeDesignator */, null /* legacyCodingSchemeDesignator */,
+					null /* codingSchemeVersion */, "T-32000" /* codeValue */, "Heart" /* codeMeaning */,
+					null /* codeStringEquivalent */, null /* synonynms */);
+			log.info("Adding One Segment...");
+			dsoWriter.addOneSegment("Segment No.1 is for ...", category, type);
+			log.info("Adding All Frames...");
+			dsoWriter.addAllFrames(pixeldata, numberOfFrames, imageWidth, imageHeight, imgType, (short)0, positions);
+			log.info("Saving Dicom File...");
+			dsoWriter.saveDicomFile(outputFilePath);
+			String[] seriesImageUids = new String[2];
+			seriesImageUids[0] = dsoWriter.getSeriesUID();
+			seriesImageUids[1] = dsoWriter.getImageUID();
+			return seriesImageUids;
+		} catch (Exception e) {
+			e.printStackTrace();
+			log.warning("Error generating DSO: " + e);
+			throw (new DicomException("Error generating DSO: " + e.getMessage()));
+		}
+	}
+
 	public String[] generateDSO(byte[] pixeldata, List<String> dicomFilePaths, String outputFilePath, String dsoSeriesDescription, String dsoSeriesUID, String dsoInstanceUID)
 			throws DicomException
 	{
@@ -274,7 +361,7 @@ public class TIFFMasksToDSOConverter
 	}
 
 	private int getAttributesFromDICOMFiles(List<String> dicomFilePaths) throws FileNotFoundException, IOException,
-			DicomException
+	DicomException
 	{
 		AttributeList localDICOMAttributes = new AttributeList();
 		String dicomInputFile = dicomFilePaths.get(0);
@@ -327,6 +414,7 @@ public class TIFFMasksToDSOConverter
 
 		try { // Get sequence format. Get position of each frame.
 			positions = new double[numberOfFrames][3];
+			sliceLocations = new double[numberOfFrames];
 			int[] instanceNos = new int[dicomFilePaths.size()];
 			for (int i = 0; i < dicomFilePaths.size(); i++) {
 				dicomInputFile = dicomFilePaths.get(i);
@@ -336,21 +424,41 @@ public class TIFFMasksToDSOConverter
 				Attribute attribute = localDICOMAttributes.get(TagFromName.ImagePositionPatient);
 				if (attribute != null)
 					this.positions[i] = attribute.getDoubleValues();
+				sliceLocations[i] = Attribute.getSingleDoubleValueOrDefault(localDICOMAttributes, TagFromName.SliceLocation, 0);
 				if (i > 0)
 				{
 					dicomAttributes[i] = (AttributeList) localDICOMAttributes.clone();
 				}
 				instanceNos[i] = Attribute.getSingleIntegerValueOrDefault(localDICOMAttributes, TagFromName.InstanceNumber, 1);
+				log.info("instance "+i+ " no:"+instanceNos[i]);
+
 			}
+			//added slicelocation for sorting, we should actually use position and orientation for sorting 
+			//but the defaultdcm4che operations do not have that info
+			
+			boolean fixInstanceNumbers=false;
+			// trigger logic in default dcm4chee operations is last-first+1!=size 
+			// should we do this?? as it is dso not the image 
+//			if (instanceNos[instanceNos.length-1] - instanceNos[0] +1 != instanceNos.length)
+//				fixInstanceNumbers = true;
+			//order by instance numbers
 			int mininstance = instanceNos.length;
 			for (int i = 0; i < instanceNos.length; i++) {
 				for (int j = i; j < instanceNos.length; j++) {
 					int instance = instanceNos[i];
 					if (instance < mininstance) mininstance = instance;
 					double[] position = positions[i];
+					double sliceLocation = sliceLocations[i];
 					AttributeList alist = dicomAttributes[i];
-					if (instanceNos[j] == instance  && j != i)
-						throw new RuntimeException("Invalid source dicom, it has duplicate instances numbers: " + instance);
+					//if instance numbers are incorrect trigger fixing it, do not throw error
+					// update instance numbers when there are more than one with the same number
+					// trigger logic in default dcm4chee operations is last-first+1!=size 
+					if (instanceNos[j] == instance  && j != i){
+						fixInstanceNumbers=true;
+						i=instanceNos.length-1;
+						break;
+//						throw new RuntimeException("Invalid source dicom, it has duplicate instances numbers: " + instance);
+					}
 					if (instanceNos[j] > instance) {
 						instanceNos[i] = instanceNos[j];
 						positions[i] = positions[j];
@@ -358,8 +466,41 @@ public class TIFFMasksToDSOConverter
 						instanceNos[j] = instance;
 						positions[j] = position;
 						dicomAttributes[j] = alist;
+						sliceLocations[i] = sliceLocations[j];
+						sliceLocations[j] = sliceLocation;
+						
 					}
 				}
+			}
+			
+			if (fixInstanceNumbers) {
+				//order by slice location in descending order
+				for (int i = 0; i < instanceNos.length; i++) {
+					for (int j = i; j < instanceNos.length; j++) {
+						int instance = instanceNos[i];
+						double[] position = positions[i];
+						double sliceLocation = sliceLocations[i];
+						AttributeList alist = dicomAttributes[i];
+						
+						if (sliceLocations[j] <= sliceLocation) {
+							instanceNos[i] = instanceNos[j];
+							positions[i] = positions[j];
+							dicomAttributes[i] = dicomAttributes[j];
+							instanceNos[j] = instance;
+							positions[j] = position;
+							dicomAttributes[j] = alist;
+							sliceLocations[i] = sliceLocations[j];
+							sliceLocations[j] = sliceLocation;
+							
+						}
+					}
+				}
+				//go through the ordered list and fix instance numbers
+				for (int i = 0; i < instanceNos.length; i++) {
+					instanceNos[i] = i+1;
+				}
+				mininstance = 1;
+				
 			}
 			return mininstance;
 		} finally {
@@ -367,9 +508,26 @@ public class TIFFMasksToDSOConverter
 		}
 	}
 
-	private byte[] getPixelsFromMaskFiles(List<String> maskFilePaths, List<String> dicomFilePaths, boolean removeEmpty) throws FileNotFoundException, IOException,
-			DicomException
+	public static BufferedImage convertRGBAToIndexed(BufferedImage src) {
+		BufferedImage dest = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_BYTE_INDEXED);
+
+		dest.createGraphics().drawImage(src, 0, 0, null);
+		return dest;
+	}
+	/**
+	 * get pixels and fill firstFrame for dso
+	 * @param maskFilePaths
+	 * @param dicomFilePaths
+	 * @param removeEmpty
+	 * @return
+	 * @throws FileNotFoundException
+	 * @throws IOException
+	 * @throws DicomException
+	 */
+	private byte[] getPixelsFromMaskFiles(List<String> maskFilePaths, List<String> dicomFilePaths, boolean removeEmpty, String dsoUID) throws FileNotFoundException, IOException,
+	DicomException
 	{
+		Integer firstFrame=-1;
 		byte[] pixels = null;
 		List<Integer> emptyFileIndex = new ArrayList<Integer>();
 		for (int i = 0; i < maskFilePaths.size(); i++) {
@@ -385,12 +543,12 @@ public class TIFFMasksToDSOConverter
 			if (i == 0)
 			{
 				System.out.println("Expected length, RGB:" + rgbLen + " BW:" + bwLen + " Grey:" + greyLen 
-							+ " Actual tiff data len:" + new_frame.length);
+						+ " Actual tiff data len:" + new_frame.length);
 				log.info("Expected length, RGB:" + rgbLen + " BW:" + bwLen + " Grey:" + greyLen 
 						+ " Actual tiff data len:" + new_frame.length);
 			}
 			boolean nonzerodata = false;
-			
+
 			// looks like 4 bytes/pixel, compress to 1 bit/pixel (else assume it is already 1 bit/pixel)
 			if (new_frame.length == rgbLen)
 			{
@@ -398,9 +556,10 @@ public class TIFFMasksToDSOConverter
 					System.out.println("Compressing tiff mask from rgb, mask:" + i);
 					log.debug("Compressing tiff mask from rgb, mask:" + i);
 				}
+
 				int numpixels = new_frame.length/4;
-				int numbytes = numpixels/8;
-				pixel_data = new byte[numbytes];
+  				int numbytes = numpixels/8;		  				
+  				pixel_data = new byte[numbytes];	
 				for (int k = 0; k < numbytes; k++)
 				{
 					int index = k*8*4;
@@ -414,37 +573,83 @@ public class TIFFMasksToDSOConverter
 							nonzerodata = true;
 						}
 					}
-//					if (pixel_data[k] != 0)
-//						log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k]);
+					if (pixel_data[k] != 0)
+						log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k] + " compress rgb");
 				}
+				 
+					
+					//				
+				
 			}
-			else if (new_frame.length == greyLen)
+			// ml if 
+			else if (new_frame.length == greyLen || maskImage.getType()== BufferedImage.TYPE_BYTE_INDEXED)
 			{
-				if (i%10 == 0) {
-					System.out.println("Compressing tiff mask from grey, mask:" + i);
-					log.debug("Compressing tiff mask from grey, mask:" + i);
-				}
-				int numpixels = new_frame.length;
-				int numbytes = numpixels/8;
-				pixel_data = new byte[numbytes];
-				for (int k = 0; k < numbytes; k++)
-				{
-					int index = k*8;
-					pixel_data[k] = 0;
-					for (int l = 0; l < 8; l++)
+				if (maskImage.getType()== BufferedImage.TYPE_BYTE_INDEXED) { //if not indexed old version should work
+					if (i%10 == 0) {
+						System.out.println("indexed tiff mask from rgb, mask:" + i);
+						log.debug("indexed tiff mask from rgb, mask:" + i);
+					}
+
+					
+					//				pixel_data = ((DataBufferByte)convertRGBAToIndexed(maskImage).getRaster().getDataBuffer()).getData();
+					int numpixels = new_frame.length;
+					pixel_data = new byte[numpixels];
+					log.info("maskfile data");
+					for (int k = 0; k < numpixels; k++)
 					{
-						if (new_frame[index + l] != 0)
+						pixel_data[k] = 0;
+						if (new_frame[k] != 0)
 						{
-							int setBit =  pixel_data[k] + (1 << l);
-							pixel_data[k] =(byte) setBit;
+							pixel_data[k] = new_frame[k];
 							nonzerodata = true;
 						}
+
+						//					byte red = (byte)((new_frame[index] * 8) / 256);
+						//					byte green = (byte)((new_frame[index+1] * 8) / 256);
+						//					byte blue = (byte)((new_frame[index+2] * 4) / 256);
+						//					pixel_data[k] =(byte) ((red << 5) | (green << 2) | blue);
+
+						//					for (int l = 0; l < 4; l=l+4)
+						//					{
+						//						if (new_frame[index + l] != 0)
+						//						{
+						//							int setBit =  pixel_data[k] + (1 << (l));
+						//							pixel_data[k] =(byte) setBit;
+						//							nonzerodata = true;
+						//						}
+						//					}
+						if (pixel_data[k] != 0)
+							log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k] +" rgb " );
 					}
-//					if (pixel_data[k] != 0)
-//						log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k]);
+
+				} else {
+					if (i%10 == 0) {
+						System.out.println("Compressing tiff mask from grey, mask:" + i);
+						log.debug("Compressing tiff mask from grey, mask:" + i);
+					}
+					int numpixels = new_frame.length;
+					int numbytes = numpixels/8;
+					pixel_data = new byte[numbytes];
+					for (int k = 0; k < numbytes; k++)
+					{
+						int index = k*8;
+						pixel_data[k] = 0;
+						for (int l = 0; l < 8; l++)
+						{
+							if (new_frame[index + l] != 0)
+							{
+								int setBit =  pixel_data[k] + (1 << l);
+								pixel_data[k] =(byte) setBit;
+								nonzerodata = true;
+							}
+						}
+						if (pixel_data[k] != 0)
+							log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k]);
+					}
 				}
+
 			}
-			else
+			else //bw
 			{
 				if (i%10 == 0) {
 					System.out.println("Flipping odd bytes of bw tif, mask:" + i);
@@ -457,6 +662,7 @@ public class TIFFMasksToDSOConverter
 					// Flip every odd byte. why on earth do we need to do this?
 					if (new_frame[k] != 0)
 						nonzerodata = true;
+					//flip if not indexed image (8 bit color)
 					if (k%2 != 0 && new_frame[k] != 0)
 					{
 						pixel_data[k] = 0;
@@ -505,11 +711,249 @@ public class TIFFMasksToDSOConverter
 					}
 					else
 						pixel_data[k] = new_frame[k];
-//					if (pixel_data[k] != 0)
-//						log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k]);
+					if (pixel_data[k] != 0)
+						log.info("maskfile bw-rgb" + i + ": " + k + " pixel:" + pixel_data[k]);
 				}
 			}
-//			log.info("maskfile" + i + ": " + maskFilePaths.get(i) + " frame_length:" + pixel_data.length + " nonzero data:" + nonzerodata);
+			log.info("maskfile" + i + ": " + maskFilePaths.get(i) + " frame_length:" + pixel_data.length + " nonzero data:" + nonzerodata);
+			if (!nonzerodata && removeEmpty) {
+				log.debug("Nodata - maskfile" + i + ": " + maskFilePaths.get(i) + " frame_length:" + pixel_data.length);
+				emptyFileIndex.add(i);
+				continue;
+			}
+			if (nonzerodata) {
+				Integer reverseNum=maskFilePaths.size()-i-1;
+				if (firstFrame==-1 || reverseNum< firstFrame) {
+					firstFrame=reverseNum;
+					log.info("setting firstframe:"+firstFrame);
+					
+				}
+					
+			}
+			if (pixels == null) {
+				//pixels = new_frame.clone();
+				pixels = pixel_data;
+			} else {
+				byte[] temp = new byte[pixels.length + pixel_data.length];
+				System.arraycopy(pixels, 0, temp, 0, pixels.length);
+				System.arraycopy(pixel_data, 0, temp, pixels.length, pixel_data.length);
+				//pixels = temp.clone();
+				pixels = temp;
+			}
+		}
+		//update the firstframe for this dso
+		log.info("first frame for dso:"+ dsoUID + " is "+firstFrame);
+		firstFrames.put(dsoUID, firstFrame);
+		for (int i = 0; i < emptyFileIndex.size(); i++)
+		{
+			int index = emptyFileIndex.get(i);
+			log.info("Removing dicom " + (dicomAttributes.length - index -1));
+			dicomFilePaths.remove(dicomAttributes.length - index -1);
+			dicomAttributes[index] = null;
+		}
+		//		for (int i = 0; i < emptyFileIndex.size(); i++)
+		//		{
+		//			int index = emptyFileIndex.get(i);
+		//			log.info("Removing dicom " + (maskFilePaths.size() - index - 1));
+		//			dicomFilePaths.remove(maskFilePaths.size() - index - 1); // DicomFiles are in reverse order for!!!
+		//		}
+		if (pixels == null)
+			throw new RuntimeException("The DSO has all empty frames");
+		log.info("Number of pixels:" + pixels.length + " dicoms:" + dicomFilePaths.size());	
+		return pixels;
+	}
+	
+	private byte[] getPixelsFromMaskFiles(List<String> maskFilePaths, List<String> dicomFilePaths, boolean removeEmpty) throws FileNotFoundException, IOException,
+	DicomException
+	{
+		byte[] pixels = null;
+		List<Integer> emptyFileIndex = new ArrayList<Integer>();
+		for (int i = 0; i < maskFilePaths.size(); i++) {
+			File maskFile = new File(maskFilePaths.get(i));
+			BufferedImage maskImage = ImageIO.read(maskFile);
+			// BufferedImage bufferedImage = new BufferedImage(image.getWidth(), image.getHeight(),
+			// BufferedImage.TYPE_BYTE_BINARY);
+			byte[] new_frame = ((DataBufferByte)maskImage.getRaster().getDataBuffer()).getData();
+			byte[] pixel_data = new_frame;
+			long rgbLen = maskImage.getWidth()*maskImage.getHeight()*4;
+			long bwLen = maskImage.getWidth()*maskImage.getHeight()/8;
+			long greyLen = maskImage.getWidth()*maskImage.getHeight();
+			if (i == 0)
+			{
+				System.out.println("Expected length, RGB:" + rgbLen + " BW:" + bwLen + " Grey:" + greyLen 
+						+ " Actual tiff data len:" + new_frame.length);
+				log.info("Expected length, RGB:" + rgbLen + " BW:" + bwLen + " Grey:" + greyLen 
+						+ " Actual tiff data len:" + new_frame.length);
+			}
+			boolean nonzerodata = false;
+
+			// looks like 4 bytes/pixel, compress to 1 bit/pixel (else assume it is already 1 bit/pixel)
+			if (new_frame.length == rgbLen)
+			{
+				if (i%10 == 0) {
+					System.out.println("Compressing tiff mask from rgb, mask:" + i);
+					log.debug("Compressing tiff mask from rgb, mask:" + i);
+				}
+
+				int numpixels = new_frame.length/4;
+  				int numbytes = numpixels/8;		  				
+  				pixel_data = new byte[numbytes];	
+				for (int k = 0; k < numbytes; k++)
+				{
+					int index = k*8*4;
+					pixel_data[k] = 0;
+					for (int l = 0; l < 4*8; l=l+4)
+					{
+						if (new_frame[index + l] != 0)
+						{
+							int setBit =  pixel_data[k] + (1 << (l/4));
+							pixel_data[k] =(byte) setBit;
+							nonzerodata = true;
+						}
+					}
+					if (pixel_data[k] != 0)
+						log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k] + " compress rgb");
+				}
+				 
+					
+					//				
+				
+			}
+			// ml if 
+			else if (new_frame.length == greyLen || maskImage.getType()== BufferedImage.TYPE_BYTE_INDEXED)
+			{
+				if (maskImage.getType()== BufferedImage.TYPE_BYTE_INDEXED) { //if not indexed old version should work
+					if (i%10 == 0) {
+						System.out.println("indexed tiff mask from rgb, mask:" + i);
+						log.debug("indexed tiff mask from rgb, mask:" + i);
+					}
+
+					
+					//				pixel_data = ((DataBufferByte)convertRGBAToIndexed(maskImage).getRaster().getDataBuffer()).getData();
+					int numpixels = new_frame.length;
+					pixel_data = new byte[numpixels];
+					log.info("maskfile data");
+					for (int k = 0; k < numpixels; k++)
+					{
+						pixel_data[k] = 0;
+						if (new_frame[k] != 0)
+						{
+							pixel_data[k] = new_frame[k];
+							nonzerodata = true;
+						}
+
+						//					byte red = (byte)((new_frame[index] * 8) / 256);
+						//					byte green = (byte)((new_frame[index+1] * 8) / 256);
+						//					byte blue = (byte)((new_frame[index+2] * 4) / 256);
+						//					pixel_data[k] =(byte) ((red << 5) | (green << 2) | blue);
+
+						//					for (int l = 0; l < 4; l=l+4)
+						//					{
+						//						if (new_frame[index + l] != 0)
+						//						{
+						//							int setBit =  pixel_data[k] + (1 << (l));
+						//							pixel_data[k] =(byte) setBit;
+						//							nonzerodata = true;
+						//						}
+						//					}
+						if (pixel_data[k] != 0)
+							log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k] +" rgb " );
+					}
+
+				} else {
+					if (i%10 == 0) {
+						System.out.println("Compressing tiff mask from grey, mask:" + i);
+						log.debug("Compressing tiff mask from grey, mask:" + i);
+					}
+					int numpixels = new_frame.length;
+					int numbytes = numpixels/8;
+					pixel_data = new byte[numbytes];
+					for (int k = 0; k < numbytes; k++)
+					{
+						int index = k*8;
+						pixel_data[k] = 0;
+						for (int l = 0; l < 8; l++)
+						{
+							if (new_frame[index + l] != 0)
+							{
+								int setBit =  pixel_data[k] + (1 << l);
+								pixel_data[k] =(byte) setBit;
+								nonzerodata = true;
+							}
+						}
+						if (pixel_data[k] != 0)
+							log.info("maskfile" + i + ": " + k + " pixel:" + pixel_data[k]);
+					}
+				}
+
+			}
+			else //bw
+			{
+				if (i%10 == 0) {
+					System.out.println("Flipping odd bytes of bw tif, mask:" + i);
+					log.debug("Flipping odd bytes of bw tif, mask:" + i);
+				}
+				int numbytes = maskImage.getWidth()*maskImage.getHeight()/8;
+				pixel_data = new byte[numbytes];
+				for (int k = 0; k < numbytes; k++)
+				{
+					// Flip every odd byte. why on earth do we need to do this?
+					if (new_frame[k] != 0)
+						nonzerodata = true;
+					//flip if not indexed image (8 bit color)
+					if (k%2 != 0 && new_frame[k] != 0)
+					{
+						pixel_data[k] = 0;
+						if ((new_frame[k] & 1) == 1)
+						{
+							int setBit = pixel_data[k]+128;
+							pixel_data[k] =(byte) setBit;
+						}
+						if ((new_frame[k] & 2) == 2)
+						{
+							int setBit = pixel_data[k]+64;
+							pixel_data[k] =(byte) setBit;
+						}
+						if ((new_frame[k] & 4) == 4)
+						{
+							int setBit = pixel_data[k]+32;
+							pixel_data[k] =(byte) setBit;
+						}
+						if ((new_frame[k] & 8) == 8)
+						{
+							int setBit = pixel_data[k]+16;
+							pixel_data[k] =(byte) setBit;
+						}
+						if ((new_frame[k] & 16) == 16)
+						{
+							int setBit = pixel_data[k]+8;
+							pixel_data[k] =(byte) setBit;
+						}
+						if ((new_frame[k] & 32) == 32)
+						{
+							int setBit = pixel_data[k]+4;
+							pixel_data[k] =(byte) setBit;
+						}
+						if ((new_frame[k] & 64) == 64)
+						{
+							int setBit = pixel_data[k]+2;
+							pixel_data[k] =(byte) setBit;
+						}
+						if ((new_frame[k] & 128) == 128)
+						{
+							int setBit = pixel_data[k]+1;
+							pixel_data[k] =(byte) setBit;
+						}
+						if (new_frame[k] != 0)
+							System.out.println("Old byte:" + new_frame[k] + " New byte:" + pixel_data[k]);	
+					}
+					else
+						pixel_data[k] = new_frame[k];
+					if (pixel_data[k] != 0)
+						log.info("maskfile bw-rgb" + i + ": " + k + " pixel:" + pixel_data[k]);
+				}
+			}
+			log.info("maskfile" + i + ": " + maskFilePaths.get(i) + " frame_length:" + pixel_data.length + " nonzero data:" + nonzerodata);
 			if (!nonzerodata && removeEmpty) {
 				log.debug("Nodata - maskfile" + i + ": " + maskFilePaths.get(i) + " frame_length:" + pixel_data.length);
 				emptyFileIndex.add(i);
@@ -533,12 +977,12 @@ public class TIFFMasksToDSOConverter
 			dicomFilePaths.remove(dicomAttributes.length - index -1);
 			dicomAttributes[index] = null;
 		}
-//		for (int i = 0; i < emptyFileIndex.size(); i++)
-//		{
-//			int index = emptyFileIndex.get(i);
-//			log.info("Removing dicom " + (maskFilePaths.size() - index - 1));
-//			dicomFilePaths.remove(maskFilePaths.size() - index - 1); // DicomFiles are in reverse order for!!!
-//		}
+		//		for (int i = 0; i < emptyFileIndex.size(); i++)
+		//		{
+		//			int index = emptyFileIndex.get(i);
+		//			log.info("Removing dicom " + (maskFilePaths.size() - index - 1));
+		//			dicomFilePaths.remove(maskFilePaths.size() - index - 1); // DicomFiles are in reverse order for!!!
+		//		}
 		if (pixels == null)
 			throw new RuntimeException("The DSO has all empty frames");
 		log.info("Number of pixels:" + pixels.length + " dicoms:" + dicomFilePaths.size());	
@@ -577,7 +1021,7 @@ public class TIFFMasksToDSOConverter
 			System.out.println("No DICOM files found");
 			return;
 		}
-			
+
 		List<String> maskFilePaths = listFilesInAlphabeticOrder(maskFilesDirectory);
 		for (int i = 0; i < maskFilePaths.size(); i++)
 		{

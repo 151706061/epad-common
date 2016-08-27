@@ -127,7 +127,16 @@ public class EPADConfig
 	// The port that the ePAD server is sitting on
 	public static final int epadPort = EPADConfig.getInstance().getIntegerPropertyValue("ePadClientPort");
 
+	//qifp data
+	public static final String qifpServer = EPADConfig.getInstance().getParamValue("qifpServer","epad-prod8.stanford.edu");
+	public static final int qifpPort = EPADConfig.getInstance().getIntegerPropertyValue("qifpPort",8090);
+	public static final String qifpUserName = EPADConfig.getInstance().getParamValue("qifpUserName","epad");
+	public static final String qifpUserPass = EPADConfig.getInstance().getParamValue("qifpUserPass","epad123");
+	
+	
 	// dcm4chee configuration
+	public static final String jmxUserName = EPADConfig.getInstance().getParamValue("jmxUserName",null);
+	public static final String jmxUserPass = EPADConfig.getInstance().getParamValue("jmxUserPassword",null);
 	public static final String dcm4CheeServer = EPADConfig.getInstance().getStringPropertyValue("NameServer");
 	public static final int dcm4cheeServerWadoPort = EPADConfig.getInstance().getIntegerPropertyValue(
 			"DicomServerWadoPort");
@@ -194,6 +203,7 @@ public class EPADConfig
 	
 	
 	public static String pluginMaxtime = EPADConfig.getInstance().getParamValue("pluginMaxtime", null);
+	public static int olderThan_Days = EPADConfig.getInstance().getIntegerPropertyValue("olderThan_Days", 360);
 	
 	private Properties properties;
 

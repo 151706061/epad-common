@@ -102,89 +102,95 @@
  * of non-limiting example, you will not contribute any code obtained by you under the GNU General Public License or other 
  * so-called "reciprocal" license.)
  *******************************************************************************/
-package edu.stanford.epad.common.plugins.impl;
+package edu.stanford.epad.common.plugins;
 
-import edu.stanford.hakan.aim4api.base.ImageAnnotationCollection;
-import edu.stanford.hakan.aim4api.plugin.PluginParameter;
-import edu.stanford.hakan.aim4api.plugin.v4.PluginV4;
+import java.io.File;
 
-public class PluginAIMOptions
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.httpclient.HttpClient;
+import org.apache.commons.httpclient.methods.PostMethod;
+import org.apache.commons.httpclient.methods.multipart.FilePart;
+import org.apache.commons.httpclient.methods.multipart.MultipartRequestEntity;
+import org.apache.commons.httpclient.methods.multipart.Part;
+import org.apache.commons.httpclient.methods.multipart.StringPart;
+
+import com.google.gwt.core.client.GWT;
+
+import edu.stanford.epad.common.util.EPADConfig;
+import edu.stanford.epad.common.util.EPADLogger;
+
+public class PluginFileUtil
 {
-	public final String pluginName, aimUID, aimName, patientID, patientName, templateID, sessionID;
-	public String templateName;
-	public final String projectID; //ml
+	private static final EPADLogger log = EPADLogger.getInstance();
 
-	public PluginAIMOptions(String pluginName, String aimUID, String aimName, String patientID, String patientName,
-			String templateID, String templateName, String sessionID)
+	private static String buildEPADBaseURL(String host, int port, String base)
 	{
-		this.pluginName = pluginName;
-		this.aimUID = aimUID;
-		this.aimName = aimName;
-		this.patientID = patientID;
-		this.patientName = patientName;
-		this.templateID = templateID;
-		this.templateName = templateName;
-		this.sessionID = sessionID;
-		this.projectID = ""; //ml
+		return buildEPADBaseURL(host, port, base, "");
+	}
+
+	private static String buildEPADBaseURL(String host, int port, String base, String ext)
+	{
+		StringBuilder sb = new StringBuilder();
+
+		sb.append("http://").append(host);
+		sb.append(":").append(port);
+		sb.append(base);
+		sb.append(ext);
+
+		return sb.toString();
+	}
+	private static String getAction(String projectID,String subjectID, String studyUID, String seriesUID, String username) {
+
+		String action = "projects/"
+				+ projectID + getParameter("subjects", subjectID)
+				+ getParameter("studies", studyUID)
+				+ getParameter("series", seriesUID) + "/files/?username="
+				+ username;
+
+		return action;
+
 	}
 	
-	public PluginAIMOptions(String pluginName, String aimUID, String aimName, String patientID, String patientName,
-			String templateID, String templateName, String sessionID, String projectID)
-	{
-		this.pluginName = pluginName;
-		this.aimUID = aimUID;
-		this.aimName = aimName;
-		this.patientID = patientID;
-		this.patientName = patientName;
-		this.templateID = templateID;
-		this.templateName = templateName;
-		this.sessionID = sessionID;
-		this.projectID = projectID; 
+	private static String getParameter(String name, String value) {
+		return value == null ? "" : "/" + name + "/" + value;
 	}
 	
-	public PluginAIMOptions(String pluginName, String sessionID, ImageAnnotationCollection imageAnnotationCollection)
+	public static int sendFileToRemoteEPAD(String username, String epadHost, String epadSessionID, String projectID, String subjectID, String studyUID, String seriesUID, File file, String description) throws Exception
 	{
-		edu.stanford.hakan.aim4api.base.ImageAnnotation imageAnnotationV4 = imageAnnotationCollection.getImageAnnotations().get(0);
-		this.pluginName = pluginName;
-		this.aimUID = imageAnnotationCollection.getUniqueIdentifier().getRoot();
-		this.aimName = imageAnnotationV4.getName().getValue();
-		this.patientID = imageAnnotationCollection.getPerson().getId().getValue();
-		this.patientName = imageAnnotationCollection.getPerson().getName().getValue();
-		this.templateID = imageAnnotationV4.getListTypeCode().get(0).getCode();
-		//ml not code system, it should be code systemname
-		if (imageAnnotationV4.getListTypeCode().get(0).getCodeSystemName()==null || imageAnnotationV4.getListTypeCode().get(0).getCodeSystemName().isEmpty()) {
-			this.templateName = imageAnnotationV4.getListTypeCode().get(0).getCodeSystem();
-		} else {
-			this.templateName = imageAnnotationV4.getListTypeCode().get(0).getCodeSystemName();
+		String url = buildEPADBaseURL(epadHost, EPADConfig.epadPort, "/epad/v2/" +getAction(projectID, subjectID, studyUID, seriesUID, username) );
+		log.info("upload url " + url);
+		HttpClient client = new HttpClient();
+        PostMethod postMethod = new PostMethod(url);
+		if (epadSessionID != null)
+			postMethod.setRequestHeader("Cookie", "JSESSIONID=" + epadSessionID);
+        try
+        {
+	        Part[] parts = {new FilePart(file.getName(), file), new StringPart("description", description)};
+	         
+	        postMethod.setRequestEntity(new MultipartRequestEntity(parts, postMethod.getParams()));
+	
+	        return client.executeMethod(postMethod);
+		} 
+        catch (Exception e) 
+        {
+			log.warning("Exception calling ePAD", e);
+			return HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
 		}
-		if (this.templateName==null || this.templateName.equals("")) {
-			this.templateName = imageAnnotationV4.getListTypeCode().get(0).getDisplayName().getValue();
-		}
-		this.sessionID = sessionID;
-		this.projectID = ""; //ml
-		
-		
-	}	
-	public PluginAIMOptions(String pluginName, String sessionID, ImageAnnotationCollection imageAnnotationCollection, String projectID)
+		finally 
+		{
+	        postMethod.releaseConnection();	
+		}       
+	}
+	
+	
+	public static int sendFileToEPAD(String username, String epadSessionID, String projectID, String subjectID, String studyUID, String seriesUID, File file, String description) throws Exception
 	{
-		edu.stanford.hakan.aim4api.base.ImageAnnotation imageAnnotationV4 = imageAnnotationCollection.getImageAnnotations().get(0);
-		this.pluginName = pluginName;
-		this.aimUID = imageAnnotationCollection.getUniqueIdentifier().getRoot();
-		this.aimName = imageAnnotationV4.getName().getValue();
-		this.patientID = imageAnnotationCollection.getPerson().getId().getValue();
-		this.patientName = imageAnnotationCollection.getPerson().getName().getValue();
-		this.templateID = imageAnnotationV4.getListTypeCode().get(0).getCode();
-//		this.templateName = imageAnnotationV4.getListTypeCode().get(0).getCodeSystem();
-		//ml not code system, it should be code systemname
-		if (imageAnnotationV4.getListTypeCode().get(0).getCodeSystemName()==null || imageAnnotationV4.getListTypeCode().get(0).getCodeSystemName().isEmpty()) {
-			this.templateName = imageAnnotationV4.getListTypeCode().get(0).getCodeSystem();
-		} else {
-			this.templateName = imageAnnotationV4.getListTypeCode().get(0).getCodeSystemName();
-		}
-		this.sessionID = sessionID;
-		this.projectID = projectID; //ml
 		
-		
-	}	
+		return sendFileToRemoteEPAD(username, EPADConfig.xnatServer, epadSessionID, projectID, subjectID, studyUID, seriesUID, file, description);
+		     
+	}
+	
+	
 	
 }

@@ -121,6 +121,7 @@ import com.pixelmed.dicom.TagFromName;
 import edu.stanford.epad.common.util.EPADConfig;
 import edu.stanford.epad.common.util.EPADLogger;
 import edu.stanford.hakan.aim4api.base.AimException;
+import edu.stanford.hakan.aim4api.base.CD;
 import edu.stanford.hakan.aim4api.base.ImageAnnotationCollection;
 import edu.stanford.hakan.aim4api.base.Person;
 import edu.stanford.hakan.aim4api.compability.aimv3.GeometricShape;
@@ -132,6 +133,10 @@ import edu.stanford.hakan.aim4api.compability.aimv3.SpatialCoordinate;
 import edu.stanford.hakan.aim4api.compability.aimv3.TwoDimensionSpatialCoordinate;
 import edu.stanford.hakan.aim4api.usage.AnnotationBuilder;
 import edu.stanford.hakan.aim4api.usage.AnnotationExtender;
+//import edu.stanford.hakan.aim4api.compability.aimv3.Lexicon;
+import edu.stanford.epad.common.util.Lexicon;
+
+
 
 public class PluginAIMUtil
 {
@@ -158,6 +163,26 @@ public class PluginAIMUtil
 				.getImageAnnotationCollectionByUniqueIdentifier(eXistServerUrl, aim4Namespace, collection4Name,
 						eXistUsername, eXistPassword, aimID);
 		return aim;
+	}
+	
+	
+	public static void sendImageAnnotationToServer(ImageAnnotationCollection imageAnnotation, String projectID, String oldAimID) throws edu.stanford.hakan.aim4api.base.AimException
+	{
+	    String collectionName = eXistCollectionV4;
+	    if (projectID != null && projectID.length() > 0)
+	    	collectionName = collectionName + "/" + projectID;
+		edu.stanford.hakan.aim4api.usage.AnnotationBuilder.saveToServer(imageAnnotation, eXistServerUrl, aim4Namespace,
+				collectionName, xsdFilePathV4, eXistUsername, eXistPassword);
+
+		String result = AnnotationBuilder.getAimXMLsaveResult();
+		try {
+			cloneAIMXmlInDatabase(imageAnnotation.getUniqueIdentifier().getRoot(),imageAnnotation.getImageAnnotation().getName().getValue(),
+					edu.stanford.hakan.aim4api.usage.AnnotationBuilder.convertToString(imageAnnotation), oldAimID);
+		} catch (Exception e) {
+			throw new edu.stanford.hakan.aim4api.base.AimException(e.getMessage());
+		}
+
+		log.info("AIM file with ID " + imageAnnotation.getUniqueIdentifier() + " saved to server; result: " + result);
 	}
 	
 	public static void sendImageAnnotationToServer(ImageAnnotationCollection imageAnnotation, String projectID) throws edu.stanford.hakan.aim4api.base.AimException
@@ -214,9 +239,12 @@ public class PluginAIMUtil
 		sc.AddSegmentation(new edu.stanford.hakan.aim4api.compability.aimv3.Segmentation(0, imageUID, sopClassUID, sourceImageUID, 1));
 		
 		imageAnnotation.setSegmentationCollection(sc);
-		edu.stanford.hakan.aim4api.compability.aimv3.DICOMImageReference dicomImageReference = createDICOMImageReferenceV3Compability(studyUID, seriesUID,
-				imageUID);
-		imageAnnotation.addImageReference(dicomImageReference);
+
+		//ml remove adding the second image ref
+//		edu.stanford.hakan.aim4api.compability.aimv3.DICOMImageReference dicomImageReference = createDICOMImageReferenceV3Compability(studyUID, seriesUID,
+//				imageUID);
+//		imageAnnotation.addImageReference(dicomImageReference);
+
 		
 		updateDSOAIMInDatabase(imageAnnotation.getUniqueIdentifier(), seriesUID);
 		return imageAnnotation.toAimV4();
@@ -234,7 +262,40 @@ public class PluginAIMUtil
 		return edu.stanford.hakan.aim4api.usage.AnnotationGetter.getImageAnnotationCollectionFromFile(getRealPath(file), xsdFilePathV4);
 	}
         
-        
+
+        //ml added sopclassuid from image		 +        
+	 public static edu.stanford.hakan.aim4api.compability.aimv3.DICOMImageReference createDICOMImageReferenceV3Compability(String dsoStudyInstanceUID, String dsoSeriesInstanceUID,		
+				String dsoSOPInstanceUID, String sopClassUID) 		
+	 	{		
+	 		edu.stanford.hakan.aim4api.compability.aimv3.DICOMImageReference dicomImageReference = new edu.stanford.hakan.aim4api.compability.aimv3.DICOMImageReference();		
+	 		dicomImageReference.setCagridId(0);		
+	 		
+	 		edu.stanford.hakan.aim4api.compability.aimv3.ImageStudy imageStudy = new edu.stanford.hakan.aim4api.compability.aimv3.ImageStudy();		
+	 		imageStudy.setCagridId(0);		
+	 		imageStudy.setInstanceUID(dsoStudyInstanceUID);		
+	 		imageStudy.setStartDate("2012-01-01T01:01:01"); // TODO		
+	 		imageStudy.setStartTime("12:00:00"); // TODO		
+	 		
+	 		edu.stanford.hakan.aim4api.compability.aimv3.ImageSeries imageSeries = new edu.stanford.hakan.aim4api.compability.aimv3.ImageSeries();		
+	 		imageSeries.setCagridId(0);		
+	 		imageSeries.setInstanceUID(dsoSeriesInstanceUID);		
+	 		
+	 		edu.stanford.hakan.aim4api.compability.aimv3.Image image = new edu.stanford.hakan.aim4api.compability.aimv3.Image();		
+	 		image.setCagridId(0);		
+	 		log.info("written SOP Class UID=" + sopClassUID);		
+	 		log.info("written SOP Instance UID=" + dsoSOPInstanceUID);		
+	 					
+	 		image.setSopClassUID(sopClassUID); // TODO ml retrieved from parameter		
+	 		image.setSopInstanceUID(dsoSOPInstanceUID);		
+	 		
+	 		imageSeries.addImage(image); // Add Image to ImageSeries		
+	 		imageStudy.setImageSeries(imageSeries); // Add ImageSeries to ImageStudy		
+	 		dicomImageReference.setImageStudy(imageStudy); // Add ImageStudy to ImageReference		
+	 		
+	 		return dicomImageReference;		
+	 	}    
+	
+
 	public static edu.stanford.hakan.aim4api.compability.aimv3.DICOMImageReference createDICOMImageReferenceV3Compability(String dsoStudyInstanceUID, String dsoSeriesInstanceUID,
 			String dsoSOPInstanceUID)
 	{
@@ -253,7 +314,8 @@ public class PluginAIMUtil
 
 		edu.stanford.hakan.aim4api.compability.aimv3.Image image = new edu.stanford.hakan.aim4api.compability.aimv3.Image();
 		image.setCagridId(0);
-		image.setSopClassUID(""); // TODO
+
+		image.setSopClassUID("NA"); // TODO
 		image.setSopInstanceUID(dsoSOPInstanceUID);
 
 		imageSeries.addImage(image); // Add Image to ImageSeries
@@ -274,12 +336,84 @@ public class PluginAIMUtil
 			this.yData = yData;
 		}
 	}
+	//old version
+	public static ImageAnnotationCollection addFeature(ImageAnnotationCollection imageAnnotationCollection, double[] featureValue,
+			String[] featureString, double featureVersion, CD calcCD) throws edu.stanford.hakan.aim4api.base.AimException 
+	{
+		return edu.stanford.hakan.aim4api.usage.AnnotationExtender.addFeature(imageAnnotationCollection, featureValue, featureString, featureVersion, calcCD);
 	
+	}
+	//old version
 	public static ImageAnnotationCollection addFeature(ImageAnnotationCollection imageAnnotationCollection, double[] featureValue,
 			String[] featureString, double featureVersion) throws edu.stanford.hakan.aim4api.base.AimException 
 	{
 		return edu.stanford.hakan.aim4api.usage.AnnotationExtender.addFeature(imageAnnotationCollection, featureValue, featureString, featureVersion);
 	}
+	
+	public static String[] parseFeature(String feature) {
+		String cd="";
+		String label="";
+		//remove all the numbers and items in paranthesis at the end
+		cd=feature.replaceAll("\\(.*\\)$", "").trim();
+		cd=cd.replaceAll("([0-9]*)$", "").trim();
+		cd=cd.replaceAll("\\-*$", "").trim();
+		
+		label = feature;
+		return new String[]{cd,label};
+	}
+	
+	//new version. uses lexicon and adds as seperate calculation entities
+	public static ImageAnnotationCollection addFeatures(ImageAnnotationCollection imageAnnotationCollection, ArrayList<String[]> features, double featureVersion, CD calcCD) throws edu.stanford.hakan.aim4api.base.AimException 
+	{
+		
+		 for (int i = 0; i < features.size(); i++) {
+	            if (features.get(i).length != 2) {
+	            	log.info("Not a feature pair, what is it?");
+	                continue;
+	            }  
+	            //parse the feature to cd value and label
+	            String[] parsedFeature = parseFeature(features.get(i)[0]);
+	            
+	            CD featureCD = Lexicon.getInstance().getLex(parsedFeature[0]);
+	           
+	            try {
+	            	imageAnnotationCollection = edu.stanford.hakan.aim4api.usage.AnnotationExtender.addFeature(imageAnnotationCollection, Double.parseDouble(features.get(i)[1]), featureCD, featureVersion, calcCD, parsedFeature[1]);
+	            }catch (NumberFormatException ne) {
+	            	log.info("Could not parse the feature value to a double. feature name:"+features.get(i)[0]+" value:"+ features.get(i)[1]);
+	            }
+	     }
+		 return imageAnnotationCollection;
+	}
+	
+	//new version. uses lexicon and adds as seperate calculation entities
+	public static ImageAnnotationCollection addFeatures(ImageAnnotationCollection imageAnnotationCollection, double[] featureValue,
+			String[] featureString, double featureVersion, CD calcCD) throws edu.stanford.hakan.aim4api.base.AimException 
+	{
+		
+		if (featureValue.length != featureString.length) {
+            throw new AimException("AimException: lenght of featureValue and featureString must be equal");
+        }
+
+		 for (int i = 0; i < featureValue.length; i++) {
+	            if (featureString[i] == null) {
+	                continue;
+	            }  
+	          //parse the feature to cd value and label
+	            String[] parsedFeature = parseFeature(featureString[i]);
+	            
+	            CD featureCD = Lexicon.getInstance().getLex(parsedFeature[0]);
+	           
+	           imageAnnotationCollection = edu.stanford.hakan.aim4api.usage.AnnotationExtender.addFeature(imageAnnotationCollection, featureValue[i], featureCD, featureVersion, calcCD, parsedFeature[1]);
+		}
+		 return imageAnnotationCollection;
+	}
+	
+    //new version. uses lexicon and adds as seperate calculation entities
+//	public static ImageAnnotationCollection addFeatures(ImageAnnotationCollection imageAnnotationCollection, double[] featureValue,
+//			String[] featureString, double featureVersion) throws edu.stanford.hakan.aim4api.base.AimException 
+//	{
+//		return edu.stanford.hakan.aim4api.usage.AnnotationExtender.addFeature(imageAnnotationCollection, featureValue, featureString, featureVersion);
+//	}
 	
 	public static String getPersonName(ImageAnnotationCollection imageAnnotationCollection)
 	{
@@ -480,6 +614,31 @@ public class PluginAIMUtil
 			con = DriverManager.getConnection(epadDatabaseURL, username, password);
     	    String sql = "UPDATE annotations set DSOSeriesUID = '" + dsoSeriesUID + "' where AnnotationUID = '" + annotationID + "'";
             log.info("DSO AIM update:" + sql);
+			statement = con.createStatement();
+			statement.executeUpdate(sql);
+		}
+		finally
+		{
+			if (statement != null) statement.close();
+			if (con != null) con.close();
+		}
+	}
+	
+	
+	private static void cloneAIMXmlInDatabase(String annotationID,String annotationName,String xml, String oldAnnotationID) throws Exception
+	{
+		String username = EPADConfig.epadDatabaseUsername;
+		String password = EPADConfig.epadDatabasePassword;
+		String epadDatabaseURL = EPADConfig.epadDatabaseURL;
+		Class.forName("com.mysql.jdbc.Driver");
+		Connection con = null;
+		Statement statement = null;
+		try
+		{
+			con = DriverManager.getConnection(epadDatabaseURL, username, password);
+    	    String sql = "insert into annotations(UserLoginName,PatientID,SeriesUID,DSOSeriesUID,StudyUID,ImageUID,FrameID,AnnotationUID,ProjectUID,XML, DELETED, DSOFRAMENO, TEMPLATECODE, SHAREDPROJECTS, NAME,AIMCOLOR ) " +
+			"(select UserLoginName,PatientID,SeriesUID,DSOSeriesUID,StudyUID,ImageUID,FrameID,'"+annotationID +"',ProjectUID,'"+ xml+"', DELETED, DSOFRAMENO, TEMPLATECODE, SHAREDPROJECTS, '"+annotationName +"',AIMCOLOR from annotations where AnnotationUID='"+oldAnnotationID+"')";
+    	    log.info("sql:"+sql);
 			statement = con.createStatement();
 			statement.executeUpdate(sql);
 		}
